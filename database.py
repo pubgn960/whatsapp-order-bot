@@ -308,3 +308,85 @@ def bulk_update_prices(price_data: List[Dict]) -> int:
 		return 0
 
 	return updated_count
+
+
+def update_package_price(category: str, package_cp: int, new_price) -> bool:
+	ensure_prices_schema()
+	conn = None
+	try:
+		conn = _get_connection()
+		with conn.cursor() as cur:
+			cur.execute(
+				"""
+				UPDATE prices
+				SET price = %s,
+					active = TRUE,
+					updated_at = CURRENT_TIMESTAMP
+				WHERE category = %s AND package_cp = %s
+				""",
+				(new_price, category, package_cp),
+			)
+			updated = cur.rowcount
+		conn.commit()
+		return updated > 0
+	except Exception as exc:
+		print(f"Failed to update package price for '{category}' - '{package_cp}': {exc}")
+		return False
+	finally:
+		if conn:
+			conn.close()
+
+
+def add_package(category: str, package_cp: int, price) -> bool:
+	ensure_prices_schema()
+	conn = None
+	try:
+		conn = _get_connection()
+		with conn.cursor() as cur:
+			cur.execute(
+				"""
+				INSERT INTO prices (category, package_cp, price, active, updated_at)
+				VALUES (%s, %s, %s, TRUE, CURRENT_TIMESTAMP)
+				ON CONFLICT (category, package_cp)
+				DO UPDATE SET
+					price = EXCLUDED.price,
+					active = TRUE,
+					updated_at = CURRENT_TIMESTAMP
+				""",
+				(category, package_cp, price),
+			)
+		conn.commit()
+		return True
+	except Exception as exc:
+		print(f"Failed to add package for '{category}' - '{package_cp}': {exc}")
+		return False
+	finally:
+		if conn:
+			conn.close()
+
+
+def remove_package(category: str, package_cp: int) -> bool:
+	ensure_prices_schema()
+	conn = None
+	try:
+		conn = _get_connection()
+		with conn.cursor() as cur:
+			cur.execute(
+				"""
+				UPDATE prices
+				SET active = FALSE,
+					updated_at = CURRENT_TIMESTAMP
+				WHERE category = %s AND package_cp = %s
+				""",
+				(category, package_cp),
+			)
+			updated = cur.rowcount
+		conn.commit()
+		return updated > 0
+	except Exception as exc:
+		print(f"Failed to remove package for '{category}' - '{package_cp}': {exc}")
+		return False
+	finally:
+		if conn:
+			conn.close()
+

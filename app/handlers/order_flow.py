@@ -766,6 +766,278 @@ def _handle_admin_completion_screenshot_reply(message: dict, admin_state: dict) 
     )
 
 
+def _send_admin_price_mgmt_menu(admin_phone: str) -> bool:
+    rows = [
+        {
+            "id": "pm_view",
+            "title": "1️⃣ View Prices",
+            "description": "Display all categories and packages",
+        },
+        {
+            "id": "pm_edit_cat",
+            "title": "2️⃣ Edit Price",
+            "description": "Update price of existing package",
+        },
+        {
+            "id": "pm_add_cat",
+            "title": "3️⃣ Add Package",
+            "description": "Add new package to category",
+        },
+        {
+            "id": "pm_remove_cat",
+            "title": "4️⃣ Remove Package",
+            "description": "Delete package from category",
+        },
+    ]
+    return send_interactive_list_message(
+        to=admin_phone,
+        body_text="📦 Price Management\n\nSelect an admin option below:",
+        button_text="Price Actions",
+        section_title="Price Management",
+        rows=rows,
+    )
+
+
+def _send_pm_category_buttons(admin_phone: str, prefix: str) -> bool:
+    return send_interactive_buttons_message(
+        to=admin_phone,
+        body_text="Select Category:",
+        buttons=[
+            (f"{prefix}_normal_orders", "📦 Normal Orders"),
+            (f"{prefix}_special_packs", "🎉 Special Packs"),
+        ],
+    )
+
+
+def _send_pm_package_list(admin_phone: str, category: str, prefix: str) -> bool:
+    packages = get_packages(category)
+    if not packages:
+        return send_text_message(admin_phone, f"No active packages found in '{category}'.")
+
+    sorted_pkgs = sorted(packages, key=lambda x: int(x.get("package_cp", 0)))
+    rows = []
+    for pkg in sorted_pkgs[:10]:
+        cp = int(pkg.get("package_cp", 0))
+        price_str = _format_price(pkg.get("price", 0))
+        rows.append(
+            {
+                "id": f"{prefix}_{cp}",
+                "title": f"{cp} CP - ${price_str}",
+            }
+        )
+
+    return send_interactive_list_message(
+        to=admin_phone,
+        body_text=f"Category: {category}\n\nSelect a package:",
+        button_text="Select Package",
+        section_title=f"{category} Packages",
+        rows=rows,
+    )
+
+
+def _handle_admin_view_prices(admin_phone: str) -> bool:
+    categories = get_categories()
+    if not categories:
+        return send_text_message(admin_phone, "No categories found in database.")
+
+    lines = []
+    for cat in categories:
+        emoji = CATEGORY_EMOJI_MAP.get(cat.lower(), "📦")
+        lines.append(f"{emoji} {cat}\n")
+        packages = get_packages(cat)
+        if not packages:
+            lines.append("No packages available.\n")
+        else:
+            sorted_pkgs = sorted(packages, key=lambda x: int(x.get("package_cp", 0)))
+            for pkg in sorted_pkgs:
+                cp = int(pkg.get("package_cp", 0))
+                price = _format_price(pkg.get("price", 0))
+                lines.append(f"{cp} CP — ${price}")
+            lines.append("")
+
+    text_body = "\n".join(lines).strip()
+    return send_text_message(admin_phone, text_body)
+
+
+def _handle_admin_price_mgmt_interactive(admin_phone: str, admin_state: dict, message: dict) -> bool:
+    interactive = message.get("interactive") or {}
+    reply_type = interactive.get("type")
+
+    item_id = ""
+    if reply_type == "button_reply":
+        item_id = ((interactive.get("button_reply") or {}).get("id") or "").strip()
+    elif reply_type == "list_reply":
+        item_id = ((interactive.get("list_reply") or {}).get("id") or "").strip()
+
+    if not item_id or not item_id.startswith("pm_"):
+        return False
+
+    if item_id == "pm_view":
+        _handle_admin_view_prices(admin_phone)
+        return True
+
+    if item_id == "pm_edit_cat":
+        _send_pm_category_buttons(admin_phone, prefix="pm_edit_sel")
+        return True
+
+    if item_id == "pm_add_cat":
+        _send_pm_category_buttons(admin_phone, prefix="pm_add_sel")
+        return True
+
+    if item_id == "pm_remove_cat":
+        _send_pm_category_buttons(admin_phone, prefix="pm_remove_sel")
+        return True
+
+    if item_id.startswith("pm_edit_sel_"):
+        cat_key = item_id.replace("pm_edit_sel_", "")
+        category = "Normal Orders" if cat_key == "normal_orders" else "Special Packs"
+        _set_stage(admin_phone, "awaiting_pm_edit_package", pm_category=category)
+        _send_pm_package_list(admin_phone, category, prefix="pm_edit_pkg")
+        return True
+
+    if item_id.startswith("pm_edit_pkg_"):
+        try:
+            cp = int(item_id.replace("pm_edit_pkg_", ""))
+        except ValueError:
+            return True
+        category = admin_state.get("pm_category", "Normal Orders")
+        current_price = get_price(cp)
+        price_str = _format_price(current_price) if current_price is not None else "0"
+        _set_stage(
+            admin_phone,
+            "awaiting_pm_edit_price_input",
+            pm_category=category,
+            pm_package_cp=cp,
+            old_price=price_str,
+        )
+        msg = f"Package:\n\n{cp} CP\n\nCurrent Price:\n\n${price_str}\n\nEnter new price:"
+        send_text_message(admin_phone, msg)
+        return True
+
+    if item_id.startswith("pm_add_sel_"):
+        cat_key = item_id.replace("pm_add_sel_", "")
+        category = "Normal Orders" if cat_key == "normal_orders" else "Special Packs"
+        _set_stage(admin_phone, "awaiting_pm_add_cp_input", pm_category=category)
+        msg = f"Category: {category}\n\nEnter Package Name / CP (e.g. 13000):"
+        send_text_message(admin_phone, msg)
+        return True
+
+    if item_id.startswith("pm_remove_sel_"):
+        cat_key = item_id.replace("pm_remove_sel_", "")
+        category = "Normal Orders" if cat_key == "normal_orders" else "Special Packs"
+        _set_stage(admin_phone, "awaiting_pm_remove_package", pm_category=category)
+        _send_pm_package_list(admin_phone, category, prefix="pm_remove_pkg")
+        return True
+
+    if item_id.startswith("pm_remove_pkg_"):
+        try:
+            cp = int(item_id.replace("pm_remove_pkg_", ""))
+        except ValueError:
+            return True
+        category = admin_state.get("pm_category", "Normal Orders")
+        from database import remove_package
+        if remove_package(category, cp):
+            msg = f"✅ Package Removed\n\nCategory: {category}\nPackage: {cp} CP"
+            send_text_message(admin_phone, msg)
+            print(f"Package Removed by Admin {admin_phone}: Category={category}, CP={cp}")
+        else:
+            send_text_message(admin_phone, "Failed to remove package.")
+        from app.services.conversation_state import set_state
+        set_state(admin_phone, {})
+        return True
+
+    return False
+
+
+def _handle_admin_price_mgmt_text(admin_phone: str, admin_state: dict, message: dict) -> None:
+    stage = admin_state.get("stage")
+    text_body = _extract_text_body(message).strip()
+
+    if stage == "awaiting_pm_edit_price_input":
+        category = admin_state.get("pm_category", "Normal Orders")
+        cp = admin_state.get("pm_package_cp")
+        old_price = admin_state.get("old_price", "0")
+
+        try:
+            new_price_val = float(text_body)
+        except ValueError:
+            send_text_message(
+                admin_phone,
+                "Please enter a valid numeric price (e.g. 68 or 68.5).",
+            )
+            return
+
+        new_price_str = _format_price(new_price_val)
+        from database import update_package_price
+        if update_package_price(category, cp, new_price_val):
+            reply_msg = (
+                "✅ Price Updated\n\n"
+                f"{cp} CP\n\n"
+                f"Old Price: ${old_price}\n\n"
+                f"New Price: ${new_price_str}"
+            )
+            send_text_message(admin_phone, reply_msg)
+            print(
+                f"Price Updated\n\n"
+                f"Admin:\n{admin_phone}\n\n"
+                f"Category:\n{category}\n\n"
+                f"Package:\n{cp} CP\n\n"
+                f"Old:\n{old_price}\n\n"
+                f"New:\n{new_price_str}"
+            )
+        else:
+            send_text_message(admin_phone, "Failed to update package price in database.")
+
+        from app.services.conversation_state import set_state
+        set_state(admin_phone, {})
+        return
+
+    if stage == "awaiting_pm_add_cp_input":
+        category = admin_state.get("pm_category", "Normal Orders")
+        try:
+            cp_val = int(text_body)
+        except ValueError:
+            send_text_message(admin_phone, "Please enter a valid numeric CP amount (e.g. 13000).")
+            return
+
+        _set_stage(
+            admin_phone,
+            "awaiting_pm_add_price_input",
+            pm_category=category,
+            pm_package_cp=cp_val,
+        )
+        msg = f"Category: {category}\nPackage: {cp_val} CP\n\nEnter Price (e.g. 79):"
+        send_text_message(admin_phone, msg)
+        return
+
+    if stage == "awaiting_pm_add_price_input":
+        category = admin_state.get("pm_category", "Normal Orders")
+        cp = admin_state.get("pm_package_cp")
+        try:
+            price_val = float(text_body)
+        except ValueError:
+            send_text_message(admin_phone, "Please enter a valid numeric price (e.g. 79).")
+            return
+
+        price_str = _format_price(price_val)
+        from database import add_package
+        if add_package(category, cp, price_val):
+            reply_msg = (
+                "✅ Package Added\n\n"
+                f"Category: {category}\n"
+                f"Package: {cp} CP\n"
+                f"Price: ${price_str}"
+            )
+            send_text_message(admin_phone, reply_msg)
+            print(f"Package Added by Admin {admin_phone}: Category={category}, CP={cp}, Price={price_str}")
+        else:
+            send_text_message(admin_phone, "Failed to add package to database.")
+
+        from app.services.conversation_state import set_state
+        set_state(admin_phone, {})
+        return
+
+
 def _handle_admin_interactive_reply(message: dict) -> None:
     interactive = message.get("interactive") or {}
     reply_type = interactive.get("type")
@@ -1326,11 +1598,28 @@ def handle_order_flow_message(user_phone: str, message: dict) -> None:
 
     if _is_admin_phone(user_phone):
         admin_state = get_state(user_phone)
-        if admin_state.get("stage") == "awaiting_admin_completion_screenshot":
+        stage = admin_state.get("stage")
+
+        if stage == "awaiting_admin_completion_screenshot":
             _handle_admin_completion_screenshot_reply(message, admin_state)
             return
 
+        if stage in {
+            "awaiting_pm_edit_price_input",
+            "awaiting_pm_add_cp_input",
+            "awaiting_pm_add_price_input",
+        }:
+            _handle_admin_price_mgmt_text(user_phone, admin_state, message)
+            return
+
+        input_str = _extract_input_string(message).lower().strip()
+        if input_str in {"price management", "prices", "price", "/prices", "💰 price management"}:
+            _send_admin_price_mgmt_menu(user_phone)
+            return
+
         if message_type == "interactive":
+            if _handle_admin_price_mgmt_interactive(user_phone, admin_state, message):
+                return
             _handle_admin_interactive_reply(message)
         else:
             print("Ignoring non-interactive admin message.")
