@@ -770,29 +770,34 @@ def _send_admin_price_mgmt_menu(admin_phone: str) -> bool:
     rows = [
         {
             "id": "pm_view",
-            "title": "1️⃣ View Prices",
+            "title": "1️⃣ 👀 View Prices",
             "description": "Display all categories and packages",
         },
         {
             "id": "pm_edit_cat",
-            "title": "2️⃣ Edit Price",
+            "title": "2️⃣ ✏️ Edit Price",
             "description": "Update price of existing package",
         },
         {
             "id": "pm_add_cat",
-            "title": "3️⃣ Add Package",
+            "title": "3️⃣ ➕ Add Package",
             "description": "Add new package to category",
         },
         {
             "id": "pm_remove_cat",
-            "title": "4️⃣ Remove Package",
+            "title": "4️⃣ ➖ Remove Package",
             "description": "Delete package from category",
+        },
+        {
+            "id": "pm_cancel",
+            "title": "5️⃣ ❌ Cancel",
+            "description": "Cancel Price Management",
         },
     ]
     return send_interactive_list_message(
         to=admin_phone,
-        body_text="📦 Price Management\n\nSelect an admin option below:",
-        button_text="Price Actions",
+        body_text="💰 Price Management",
+        button_text="Price Options",
         section_title="Price Management",
         rows=rows,
     )
@@ -805,6 +810,7 @@ def _send_pm_category_buttons(admin_phone: str, prefix: str) -> bool:
         buttons=[
             (f"{prefix}_normal_orders", "📦 Normal Orders"),
             (f"{prefix}_special_packs", "🎉 Special Packs"),
+            ("pm_cancel", "❌ Cancel"),
         ],
     )
 
@@ -816,7 +822,7 @@ def _send_pm_package_list(admin_phone: str, category: str, prefix: str) -> bool:
 
     sorted_pkgs = sorted(packages, key=lambda x: int(x.get("package_cp", 0)))
     rows = []
-    for pkg in sorted_pkgs[:10]:
+    for pkg in sorted_pkgs[:9]:
         cp = int(pkg.get("package_cp", 0))
         price_str = _format_price(pkg.get("price", 0))
         rows.append(
@@ -825,6 +831,14 @@ def _send_pm_package_list(admin_phone: str, category: str, prefix: str) -> bool:
                 "title": f"{cp} CP - ${price_str}",
             }
         )
+
+    rows.append(
+        {
+            "id": "pm_cancel",
+            "title": "❌ Cancel",
+            "description": "Cancel selection",
+        }
+    )
 
     return send_interactive_list_message(
         to=admin_phone,
@@ -869,8 +883,14 @@ def _handle_admin_price_mgmt_interactive(admin_phone: str, admin_state: dict, me
     elif reply_type == "list_reply":
         item_id = ((interactive.get("list_reply") or {}).get("id") or "").strip()
 
-    if not item_id or not item_id.startswith("pm_"):
+    if not item_id or not (item_id.startswith("pm_") or item_id == "pm_cancel"):
         return False
+
+    if item_id == "pm_cancel":
+        from app.services.conversation_state import set_state
+        set_state(admin_phone, {})
+        send_text_message(admin_phone, "❌ Price Management Cancelled.")
+        return True
 
     if item_id == "pm_view":
         _handle_admin_view_prices(admin_phone)
@@ -910,7 +930,13 @@ def _handle_admin_price_mgmt_interactive(admin_phone: str, admin_state: dict, me
             pm_package_cp=cp,
             old_price=price_str,
         )
-        msg = f"Package:\n\n{cp} CP\n\nCurrent Price:\n\n${price_str}\n\nEnter new price:"
+        msg = (
+            f"Package\n\n"
+            f"{cp} CP\n\n"
+            f"Current Price\n\n"
+            f"${price_str}\n\n"
+            f"Please enter the new price."
+        )
         send_text_message(admin_phone, msg)
         return True
 
@@ -918,7 +944,7 @@ def _handle_admin_price_mgmt_interactive(admin_phone: str, admin_state: dict, me
         cat_key = item_id.replace("pm_add_sel_", "")
         category = "Normal Orders" if cat_key == "normal_orders" else "Special Packs"
         _set_stage(admin_phone, "awaiting_pm_add_cp_input", pm_category=category)
-        msg = f"Category: {category}\n\nEnter Package Name / CP (e.g. 13000):"
+        msg = f"Package:\n\nPlease enter the Package Name / CP (e.g. 13000 CP):"
         send_text_message(admin_phone, msg)
         return True
 
@@ -935,13 +961,47 @@ def _handle_admin_price_mgmt_interactive(admin_phone: str, admin_state: dict, me
         except ValueError:
             return True
         category = admin_state.get("pm_category", "Normal Orders")
+        _set_stage(
+            admin_phone,
+            "awaiting_pm_remove_confirm",
+            pm_category=category,
+            pm_package_cp=cp,
+        )
+        body = (
+            f"Confirm Delete\n\n"
+            f"Category: {category}\n"
+            f"Package: {cp} CP\n\n"
+            f"Are you sure you want to remove this package?"
+        )
+        send_interactive_buttons_message(
+            to=admin_phone,
+            body_text=body,
+            buttons=[
+                ("pm_remove_confirm_yes", "✅ Confirm Delete"),
+                ("pm_cancel", "❌ Cancel"),
+            ],
+        )
+        return True
+
+    if item_id == "pm_remove_confirm_yes":
+        category = admin_state.get("pm_category", "Normal Orders")
+        cp = admin_state.get("pm_package_cp")
+        if not cp:
+            send_text_message(admin_phone, "No package specified for deletion.")
+            return True
+
         from database import remove_package
-        if remove_package(category, cp):
-            msg = f"✅ Package Removed\n\nCategory: {category}\nPackage: {cp} CP"
-            send_text_message(admin_phone, msg)
-            print(f"Package Removed by Admin {admin_phone}: Category={category}, CP={cp}")
+        if remove_package(category, int(cp)):
+            send_text_message(admin_phone, "✅ Package Removed Successfully")
+            print(
+                f"Package Removed\n\n"
+                f"Admin:\n{admin_phone}\n\n"
+                f"Category:\n{category}\n\n"
+                f"Package:\n{cp} CP"
+            )
         else:
             send_text_message(admin_phone, "Failed to remove package.")
+
         from app.services.conversation_state import set_state
         set_state(admin_phone, {})
         return True
@@ -952,6 +1012,12 @@ def _handle_admin_price_mgmt_interactive(admin_phone: str, admin_state: dict, me
 def _handle_admin_price_mgmt_text(admin_phone: str, admin_state: dict, message: dict) -> None:
     stage = admin_state.get("stage")
     text_body = _extract_text_body(message).strip()
+
+    if text_body.lower() in {"cancel", "exit", "stop"}:
+        from app.services.conversation_state import set_state
+        set_state(admin_phone, {})
+        send_text_message(admin_phone, "❌ Price Management Cancelled.")
+        return
 
     if stage == "awaiting_pm_edit_price_input":
         category = admin_state.get("pm_category", "Normal Orders")
@@ -971,10 +1037,10 @@ def _handle_admin_price_mgmt_text(admin_phone: str, admin_state: dict, message: 
         from database import update_package_price
         if update_package_price(category, cp, new_price_val):
             reply_msg = (
-                "✅ Price Updated\n\n"
-                f"{cp} CP\n\n"
-                f"Old Price: ${old_price}\n\n"
-                f"New Price: ${new_price_str}"
+                "✅ Price Updated Successfully\n\n"
+                f"Package:\n{cp} CP\n\n"
+                f"Old Price:\n${old_price}\n\n"
+                f"New Price:\n${new_price_str}"
             )
             send_text_message(admin_phone, reply_msg)
             print(
@@ -982,8 +1048,8 @@ def _handle_admin_price_mgmt_text(admin_phone: str, admin_state: dict, message: 
                 f"Admin:\n{admin_phone}\n\n"
                 f"Category:\n{category}\n\n"
                 f"Package:\n{cp} CP\n\n"
-                f"Old:\n{old_price}\n\n"
-                f"New:\n{new_price_str}"
+                f"Old Price:\n{old_price}\n\n"
+                f"New Price:\n{new_price_str}"
             )
         else:
             send_text_message(admin_phone, "Failed to update package price in database.")
@@ -994,19 +1060,20 @@ def _handle_admin_price_mgmt_text(admin_phone: str, admin_state: dict, message: 
 
     if stage == "awaiting_pm_add_cp_input":
         category = admin_state.get("pm_category", "Normal Orders")
-        try:
-            cp_val = int(text_body)
-        except ValueError:
-            send_text_message(admin_phone, "Please enter a valid numeric CP amount (e.g. 13000).")
+        import re
+        cp_digits = re.sub(r"\D", "", text_body)
+        if not cp_digits:
+            send_text_message(admin_phone, "Please enter a valid numeric CP amount (e.g. 13000 CP).")
             return
 
+        cp_val = int(cp_digits)
         _set_stage(
             admin_phone,
             "awaiting_pm_add_price_input",
             pm_category=category,
             pm_package_cp=cp_val,
         )
-        msg = f"Category: {category}\nPackage: {cp_val} CP\n\nEnter Price (e.g. 79):"
+        msg = f"Price:\n\nPlease enter the price for {cp_val} CP (e.g. 79):"
         send_text_message(admin_phone, msg)
         return
 
@@ -1022,14 +1089,14 @@ def _handle_admin_price_mgmt_text(admin_phone: str, admin_state: dict, message: 
         price_str = _format_price(price_val)
         from database import add_package
         if add_package(category, cp, price_val):
-            reply_msg = (
-                "✅ Package Added\n\n"
-                f"Category: {category}\n"
-                f"Package: {cp} CP\n"
-                f"Price: ${price_str}"
+            send_text_message(admin_phone, "✅ Package Added Successfully")
+            print(
+                f"Package Added\n\n"
+                f"Admin:\n{admin_phone}\n\n"
+                f"Category:\n{category}\n\n"
+                f"Package:\n{cp} CP\n\n"
+                f"Price:\n{price_str}"
             )
-            send_text_message(admin_phone, reply_msg)
-            print(f"Package Added by Admin {admin_phone}: Category={category}, CP={cp}, Price={price_str}")
         else:
             send_text_message(admin_phone, "Failed to add package to database.")
 
@@ -1596,6 +1663,15 @@ def handle_order_flow_message(user_phone: str, message: dict) -> None:
     state = get_state(user_phone)
     print(f"Current state for {user_phone}: {state}")
 
+    input_str = _extract_input_string(message).lower().strip()
+    is_price_cmd = input_str in {"/price", "price", "/prices", "prices", "price management", "💰 price management"} or input_str.startswith("/price")
+    is_pm_interactive = input_str.startswith("pm_")
+
+    if (is_price_cmd or is_pm_interactive) and not _is_admin_phone(user_phone):
+        print(f"Unauthorized price management attempt by {user_phone}.")
+        send_text_message(user_phone, "⛔ You are not authorized to use this command.")
+        return
+
     if _is_admin_phone(user_phone):
         admin_state = get_state(user_phone)
         stage = admin_state.get("stage")
@@ -1612,8 +1688,7 @@ def handle_order_flow_message(user_phone: str, message: dict) -> None:
             _handle_admin_price_mgmt_text(user_phone, admin_state, message)
             return
 
-        input_str = _extract_input_string(message).lower().strip()
-        if input_str in {"price management", "prices", "price", "/prices", "💰 price management"}:
+        if is_price_cmd:
             _send_admin_price_mgmt_menu(user_phone)
             return
 
