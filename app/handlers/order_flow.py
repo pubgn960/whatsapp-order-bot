@@ -305,7 +305,13 @@ def _normalize_phone(phone: str) -> str:
 def _is_admin_phone(user_phone: str) -> bool:
     if not ADMIN_PHONE:
         return False
-    return _normalize_phone(user_phone) == _normalize_phone(ADMIN_PHONE)
+    p1 = _normalize_phone(user_phone)
+    p2 = _normalize_phone(ADMIN_PHONE)
+    if not p1 or not p2:
+        return False
+    if p1 == p2:
+        return True
+    return len(p1) >= 10 and len(p2) >= 10 and p1[-10:] == p2[-10:]
 
 
 def _generate_order_id() -> str:
