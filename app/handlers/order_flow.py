@@ -277,6 +277,9 @@ def _send_package_list(user_phone: str, category: str) -> bool:
             "No packages are available right now for this category. Please try again later.",
         )
 
+    if len(rows) > 9:
+        rows = rows[:9]
+
     rows.append(
         {
             "id": "nav_back",
@@ -284,26 +287,12 @@ def _send_package_list(user_phone: str, category: str) -> bool:
             "description": "Return to Category Selection",
         }
     )
-    rows.append(
-        {
-            "id": "nav_restart",
-            "title": "🔄 Restart Order",
-            "description": "Start over",
-        }
-    )
-    rows.append(
-        {
-            "id": "nav_support",
-            "title": "📞 Inquiry & Support",
-            "description": "Get help from support",
-        }
-    )
 
     return send_interactive_list_message(
         to=user_phone,
         body_text=PACKAGE_HEADER,
         button_text="Select Package",
-        section_title="CP Packages",
+        section_title=f"{category} Packages",
         rows=rows,
     )
 
