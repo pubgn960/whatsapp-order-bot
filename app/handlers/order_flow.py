@@ -184,12 +184,26 @@ def _send_welcome_continue(user_phone: str) -> bool:
     )
 
 
+def _send_nav_options_buttons(user_phone: str) -> bool:
+    return send_interactive_buttons_message(
+        to=user_phone,
+        body_text="Navigation Options:",
+        buttons=[
+            ("nav_back", "⬅️ Back"),
+            ("nav_restart", "🔄 Restart Order"),
+            ("nav_support", "📞 Support"),
+        ],
+    )
+
+
 def _send_game_button(user_phone: str) -> bool:
-    return send_interactive_button_message(
+    return send_interactive_buttons_message(
         to=user_phone,
         body_text=GAME_SELECTION_TEXT,
-        button_id="game_cod_mobile",
-        button_title="COD Mobile",
+        buttons=[
+            ("game_cod_mobile", "COD Mobile"),
+            ("nav_back", "⬅️ Back"),
+        ],
     )
 
 
@@ -208,9 +222,10 @@ def _send_category_buttons(user_phone: str) -> bool:
         )
 
     buttons = []
-    for category in categories[:3]:
+    for category in categories[:2]:
         emoji = CATEGORY_EMOJI_MAP.get(category.lower(), "📦")
         buttons.append((_category_button_id(category), f"{emoji} {category}"))
+    buttons.append(("nav_back", "⬅️ Back"))
 
     return send_interactive_buttons_message(
         to=user_phone,
@@ -262,6 +277,28 @@ def _send_package_list(user_phone: str, category: str) -> bool:
             "No packages are available right now for this category. Please try again later.",
         )
 
+    rows.append(
+        {
+            "id": "nav_back",
+            "title": "⬅️ Back",
+            "description": "Return to Category Selection",
+        }
+    )
+    rows.append(
+        {
+            "id": "nav_restart",
+            "title": "🔄 Restart Order",
+            "description": "Start over",
+        }
+    )
+    rows.append(
+        {
+            "id": "nav_support",
+            "title": "📞 Inquiry & Support",
+            "description": "Get help from support",
+        }
+    )
+
     return send_interactive_list_message(
         to=user_phone,
         body_text=PACKAGE_HEADER,
@@ -278,12 +315,34 @@ def _send_login_method_buttons(user_phone: str) -> bool:
         buttons=[
             ("login_activision", "Activision"),
             ("login_facebook", "Facebook"),
+            ("nav_back", "⬅️ Back"),
         ],
     )
 
 
 def _send_payment_method_list(user_phone: str) -> bool:
     rows = [{"id": item_id, "title": label} for item_id, label in PAYMENT_METHOD_OPTIONS]
+    rows.append(
+        {
+            "id": "nav_back",
+            "title": "⬅️ Back",
+            "description": "Return to Account Details",
+        }
+    )
+    rows.append(
+        {
+            "id": "nav_restart",
+            "title": "🔄 Restart Order",
+            "description": "Start over",
+        }
+    )
+    rows.append(
+        {
+            "id": "nav_support",
+            "title": "📞 Inquiry & Support",
+            "description": "Get help from support",
+        }
+    )
     return send_interactive_list_message(
         to=user_phone,
         body_text=PAYMENT_METHOD_TEXT,
@@ -797,7 +856,9 @@ def _handle_payment_method_selection(user_phone: str, state: dict, payment_id: s
             "awaiting_payment_screenshot",
             payment_method=payment_label,
         )
-        return send_text_message(user_phone, BINANCE_PAYMENT_TEXT)
+        res = send_text_message(user_phone, BINANCE_PAYMENT_TEXT)
+        _send_nav_options_buttons(user_phone)
+        return res
 
     if payment_id == "payment_bybit":
         _set_stage(
@@ -805,7 +866,9 @@ def _handle_payment_method_selection(user_phone: str, state: dict, payment_id: s
             "awaiting_payment_screenshot",
             payment_method=payment_label,
         )
-        return send_text_message(user_phone, BYBIT_PAYMENT_TEXT)
+        res = send_text_message(user_phone, BYBIT_PAYMENT_TEXT)
+        _send_nav_options_buttons(user_phone)
+        return res
 
     if payment_id == "payment_tron_trc20":
         _set_stage(
@@ -813,7 +876,9 @@ def _handle_payment_method_selection(user_phone: str, state: dict, payment_id: s
             "awaiting_payment_screenshot",
             payment_method=payment_label,
         )
-        return send_text_message(user_phone, TRON_PAYMENT_TEXT)
+        res = send_text_message(user_phone, TRON_PAYMENT_TEXT)
+        _send_nav_options_buttons(user_phone)
+        return res
 
     if payment_id == "payment_no_method":
         _set_stage(
@@ -931,6 +996,7 @@ def _handle_interactive_reply(user_phone: str, message: dict) -> None:
             print("Login Method: Activision")
             if send_text_message(user_phone, _build_activision_template(selected_package)):
                 print("Sent Activision one-message template.")
+                _send_nav_options_buttons(user_phone)
             else:
                 print("Failed to send Activision template.")
             return
@@ -945,6 +1011,7 @@ def _handle_interactive_reply(user_phone: str, message: dict) -> None:
             print("Login Method: Facebook")
             if send_text_message(user_phone, _build_facebook_template(selected_package)):
                 print("Sent Facebook one-message template.")
+                _send_nav_options_buttons(user_phone)
             else:
                 print("Failed to send Facebook template.")
             return
