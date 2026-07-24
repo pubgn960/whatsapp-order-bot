@@ -595,6 +595,24 @@ def _get_latest_actionable_order_id() -> str:
     return candidates[0][1]
 
 
+def _build_customer_completion_message(order_id: str) -> str:
+    return (
+        "🎉 Your COD Mobile order has been completed successfully!\n\n"
+        "📦 Order ID:\n"
+        f"{order_id}\n\n"
+        "✅ Status:\n"
+        "Completed\n\n"
+        "Thank you for choosing Alyan Gamer! ❤️\n\n"
+        "🔐 For your account's security, please change your password as soon as possible.\n\n"
+        "If you have any questions or need assistance, feel free to contact us.\n\n"
+        "📱 WhatsApp\n"
+        "https://wa.me/923346781828\n\n"
+        "📢 Telegram\n"
+        "https://t.me/Alyan_Gamer\n\n"
+        "We look forward to serving you again. 🎮"
+    )
+
+
 def _handle_admin_action(button_id: str) -> None:
     next_status = _ADMIN_ACTION_TO_STATUS.get(button_id)
     if not next_status:
@@ -614,6 +632,22 @@ def _handle_admin_action(button_id: str) -> None:
         print(f"No customer mapped for order {order_id}.")
         return
 
+    if button_id == "admin_completed":
+        if ADMIN_PHONE:
+            _set_stage(
+                ADMIN_PHONE,
+                "awaiting_admin_completion_screenshot",
+                target_customer_phone=customer_phone,
+                target_order_id=order_id,
+            )
+            prompt = (
+                "📸 Please upload the completion screenshot for this order.\n\n"
+                "The screenshot will be forwarded to the customer after upload."
+            )
+            send_text_message(ADMIN_PHONE, prompt)
+            print(f"Requested completion screenshot from admin for order {order_id}.")
+        return
+
     _set_stage(customer_phone, next_status, order_status=next_status)
     customer_message = _build_customer_status_message(next_status, order_id)
     if customer_message:
@@ -624,6 +658,56 @@ def _handle_admin_action(button_id: str) -> None:
             ADMIN_PHONE,
             f"Order {order_id} updated to {next_status} for customer {customer_phone}.",
         )
+
+
+def _handle_admin_completion_screenshot_reply(message: dict, admin_state: dict) -> None:
+    customer_phone = admin_state.get("target_customer_phone", "")
+    order_id = admin_state.get("target_order_id", "")
+
+    if not customer_phone or not order_id:
+        if ADMIN_PHONE:
+            send_text_message(ADMIN_PHONE, "Error: Target customer order not found.")
+        from app.services.conversation_state import set_state
+        set_state(ADMIN_PHONE, {})
+        return
+
+    message_type = message.get("type")
+    is_image = message_type in {"image", "photo"} or (
+        message_type == "document" and _is_image_document(message)
+    )
+
+    if not is_image:
+        if ADMIN_PHONE:
+            send_text_message(
+                ADMIN_PHONE,
+                "Please upload a valid image screenshot for the completed order.",
+            )
+        print("Admin provided non-image message when completion screenshot was expected.")
+        return
+
+    media_object = message.get("image") or message.get("photo") or message.get("document") or {}
+    media_id = media_object.get("id", "")
+
+    if message_type == "document":
+        send_document_message(customer_phone, media_id)
+    else:
+        send_image_message(customer_phone, media_id)
+    print(f"Forwarded completion screenshot to customer {customer_phone}.")
+
+    completion_msg = _build_customer_completion_message(order_id)
+    send_text_message(customer_phone, completion_msg)
+    print(f"Sent completion message to customer {customer_phone}.")
+
+    _set_stage(customer_phone, "completed", order_status="completed")
+
+    if ADMIN_PHONE:
+        send_text_message(
+            ADMIN_PHONE,
+            f"Order {order_id} completed. Screenshot and completion message delivered to customer {customer_phone}.",
+        )
+
+    from app.services.conversation_state import set_state
+    set_state(ADMIN_PHONE, {})
 
 
 def _handle_admin_interactive_reply(message: dict) -> None:
@@ -1185,6 +1269,11 @@ def handle_order_flow_message(user_phone: str, message: dict) -> None:
     print(f"Current state for {user_phone}: {state}")
 
     if _is_admin_phone(user_phone):
+        admin_state = get_state(user_phone)
+        if admin_state.get("stage") == "awaiting_admin_completion_screenshot":
+            _handle_admin_completion_screenshot_reply(message, admin_state)
+            return
+
         if message_type == "interactive":
             _handle_admin_interactive_reply(message)
         else:
