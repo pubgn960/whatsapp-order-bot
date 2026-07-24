@@ -359,13 +359,21 @@ def _is_restart_attempt_message(message: dict) -> bool:
 def _send_active_order_protection_message(user_phone: str, state: dict) -> bool:
     order_id = state.get("order_id", "")
     current_status = state.get("order_status", "")
+    status_display = {
+        "pending_verification": "Pending Verification",
+        "accepted": "Accepted",
+        "processing": "Processing",
+        "completed": "Completed",
+        "rejected": "Rejected",
+    }.get(current_status, "Pending Verification" if current_status == "pending_verification" else current_status.title())
     message = (
         "📦 You already have an active order.\n\n"
         "Order ID:\n"
         f"{order_id}\n\n"
         "Status:\n"
-        f"{current_status}\n\n"
-        "Please wait until your current order is finished."
+        f"{status_display}\n\n"
+        "Please wait until your current order is completed.\n\n"
+        "If you need assistance, please contact Alyan Gamer Support."
     )
     return send_text_message(user_phone, message)
 
@@ -1004,6 +1012,117 @@ def _handle_interactive_reply(user_phone: str, message: dict) -> None:
     print("Interactive reply did not match any sprint action.")
 
 
+SUPPORT_TEXT = (
+    "📞 For Inquiry & Support\n\n"
+    "Need help?\n\n"
+    "Our team is here to assist you.\n\n"
+    "📱 WhatsApp\n\n"
+    "https://wa.me/923346781828\n\n"
+    "📢 Telegram\n\n"
+    "https://t.me/Alyan_Gamer\n\n"
+    "Thank you for choosing Alyan Gamer ❤️"
+)
+
+
+def _extract_input_string(message: dict) -> str:
+    message_type = message.get("type")
+    if message_type == "text":
+        return _extract_text_body(message)
+    if message_type == "interactive":
+        interactive = message.get("interactive") or {}
+        reply_type = interactive.get("type")
+        if reply_type == "button_reply":
+            btn = interactive.get("button_reply") or {}
+            return btn.get("id", "") or btn.get("title", "")
+        if reply_type == "list_reply":
+            lst = interactive.get("list_reply") or {}
+            return lst.get("id", "") or lst.get("title", "")
+    return ""
+
+
+def _is_support_trigger(message: dict) -> bool:
+    val = _extract_input_string(message).lower().strip()
+    if not val:
+        return False
+    return val in {"nav_support", "inquiry", "support", "help", "📞 inquiry & support", "inquiry & support", "support & inquiry"} or "inquiry" in val or "support" in val
+
+
+def _is_restart_trigger(message: dict) -> bool:
+    val = _extract_input_string(message).lower().strip()
+    if not val:
+        return False
+    return val in {"nav_restart", "restart", "restart order", "🔄 restart order"} or val in {"hi", "hello", "start"}
+
+
+def _is_back_trigger(message: dict) -> bool:
+    val = _extract_input_string(message).lower().strip()
+    if not val:
+        return False
+    return val in {"nav_back", "back", "⬅️ back", "back navigation", "go back"}
+
+
+def _handle_support_request(user_phone: str) -> None:
+    print("Inquiry & Support opened.")
+    print("Customer resumed ordering.")
+    send_text_message(user_phone, SUPPORT_TEXT)
+
+
+def _handle_restart_request(user_phone: str, state: dict) -> None:
+    if _is_active_order(state):
+        print("Blocked restart attempt due to active order.")
+        _send_active_order_protection_message(user_phone, state)
+        return
+
+    from app.services.conversation_state import set_state
+    set_state(user_phone, {})
+    print("Customer restarted order.")
+    print("Temporary order state cleared.")
+    if _send_welcome_continue(user_phone):
+        _set_stage(user_phone, "awaiting_continue")
+
+
+def _handle_back_request(user_phone: str, state: dict) -> None:
+    print("Customer selected Back.")
+    print("Returning to previous step.")
+
+    stage = state.get("stage")
+
+    if stage in {"package_selection", "package_selected", "awaiting_category"}:
+        _set_stage(user_phone, "awaiting_category")
+        _send_category_buttons(user_phone)
+        return
+
+    if stage == "awaiting_login_method":
+        selected_category = state.get("category", "") or state.get("selected_category", "") or "Normal Orders"
+        _set_stage(user_phone, "package_selection", category=selected_category)
+        _send_package_list(user_phone, selected_category)
+        return
+
+    if stage in {"awaiting_activision_details", "awaiting_facebook_details"}:
+        _set_stage(user_phone, "awaiting_login_method")
+        _send_login_method_buttons(user_phone)
+        return
+
+    if stage == "awaiting_payment_method":
+        login_method = state.get("login_method", "Activision")
+        selected_package = state.get("selected_package", "")
+        if login_method == "Facebook":
+            _set_stage(user_phone, "awaiting_facebook_details", login_method="Facebook")
+            send_text_message(user_phone, _build_facebook_template(selected_package))
+        else:
+            _set_stage(user_phone, "awaiting_activision_details", login_method="Activision")
+            send_text_message(user_phone, _build_activision_template(selected_package))
+        return
+
+    if stage == "awaiting_payment_screenshot":
+        _set_stage(user_phone, "awaiting_payment_method")
+        _send_payment_method_prompt(user_phone)
+        return
+
+    _set_stage(user_phone, "awaiting_continue")
+    _send_welcome_continue(user_phone)
+
+
 def handle_order_flow_message(user_phone: str, message: dict) -> None:
     message_type = message.get("type")
     state = get_state(user_phone)
@@ -1016,9 +1135,16 @@ def handle_order_flow_message(user_phone: str, message: dict) -> None:
             print("Ignoring non-interactive admin message.")
         return
 
-    if _is_active_order(state) and _is_restart_attempt_message(message):
-        print("Blocked restart attempt due to active order.")
-        _send_active_order_protection_message(user_phone, state)
+    if _is_support_trigger(message):
+        _handle_support_request(user_phone)
+        return
+
+    if _is_restart_trigger(message):
+        _handle_restart_request(user_phone, state)
+        return
+
+    if _is_back_trigger(message):
+        _handle_back_request(user_phone, state)
         return
 
     if not state.get("stage"):
