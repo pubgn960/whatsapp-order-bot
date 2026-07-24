@@ -603,13 +603,27 @@ def _build_customer_completion_message(order_id: str) -> str:
         "✅ Status:\n"
         "Completed\n\n"
         "Thank you for choosing Alyan Gamer! ❤️\n\n"
-        "🔐 For your account's security, please change your password as soon as possible.\n\n"
-        "If you have any questions or need assistance, feel free to contact us.\n\n"
+        "🔐 For your account's security, please change your password immediately.\n\n"
+        "If you need any assistance, please contact us.\n\n"
         "📱 WhatsApp\n"
         "https://wa.me/923346781828\n\n"
         "📢 Telegram\n"
-        "https://t.me/Alyan_Gamer\n\n"
-        "We look forward to serving you again. 🎮"
+        "https://t.me/Alyan_Gamer"
+    )
+
+
+def _send_admin_completion_prompt(order_id: str) -> None:
+    if not ADMIN_PHONE:
+        return
+    prompt = (
+        "📸 Please upload one or more completion screenshots for this order.\n\n"
+        "When you have uploaded all screenshots, press 'Send to Customer'."
+    )
+    send_interactive_button_message(
+        to=ADMIN_PHONE,
+        body_text=prompt,
+        button_id="admin_send_to_customer",
+        button_title="✅ Send to Customer",
     )
 
 
@@ -639,12 +653,9 @@ def _handle_admin_action(button_id: str) -> None:
                 "awaiting_admin_completion_screenshot",
                 target_customer_phone=customer_phone,
                 target_order_id=order_id,
+                screenshots=[],
             )
-            prompt = (
-                "📸 Please upload the completion screenshot for this order.\n\n"
-                "The screenshot will be forwarded to the customer after upload."
-            )
-            send_text_message(ADMIN_PHONE, prompt)
+            _send_admin_completion_prompt(order_id)
             print(f"Requested completion screenshot from admin for order {order_id}.")
         return
 
@@ -663,6 +674,7 @@ def _handle_admin_action(button_id: str) -> None:
 def _handle_admin_completion_screenshot_reply(message: dict, admin_state: dict) -> None:
     customer_phone = admin_state.get("target_customer_phone", "")
     order_id = admin_state.get("target_order_id", "")
+    screenshots = list(admin_state.get("screenshots", []))
 
     if not customer_phone or not order_id:
         if ADMIN_PHONE:
@@ -671,6 +683,55 @@ def _handle_admin_completion_screenshot_reply(message: dict, admin_state: dict) 
         set_state(ADMIN_PHONE, {})
         return
 
+    input_str = _extract_input_string(message).lower().strip()
+    is_send_action = (
+        input_str in {"admin_send_to_customer", "send to customer", "send", "✅ send to customer"}
+        or "send" in input_str
+    )
+
+    if is_send_action:
+        if not screenshots:
+            if ADMIN_PHONE:
+                send_interactive_button_message(
+                    to=ADMIN_PHONE,
+                    body_text="❌ Please upload at least one completion screenshot before sending.",
+                    button_id="admin_send_to_customer",
+                    button_title="✅ Send to Customer",
+                )
+            print("Admin pressed Send to Customer without uploading any screenshots.")
+            return
+
+        # Forward all stored screenshots to customer in upload order
+        for item in screenshots:
+            m_id = item.get("id", "")
+            m_type = item.get("type", "image")
+            if m_type == "document":
+                send_document_message(customer_phone, m_id)
+            else:
+                send_image_message(customer_phone, m_id)
+        print(f"Forwarded {len(screenshots)} completion screenshot(s) to customer {customer_phone}.")
+
+        # Send EXACTLY ONE completion message to customer
+        completion_msg = _build_customer_completion_message(order_id)
+        send_text_message(customer_phone, completion_msg)
+        print(f"Sent single completion message to customer {customer_phone}.")
+
+        # Mark order as completed
+        _set_stage(customer_phone, "completed", order_status="completed")
+
+        # Confirm back to admin
+        if ADMIN_PHONE:
+            send_text_message(
+                ADMIN_PHONE,
+                f"Order {order_id} completed. {len(screenshots)} screenshot(s) and completion message delivered to customer {customer_phone}.",
+            )
+
+        # Clear admin state
+        from app.services.conversation_state import set_state
+        set_state(ADMIN_PHONE, {})
+        return
+
+    # Handle incoming image upload
     message_type = message.get("type")
     is_image = message_type in {"image", "photo"} or (
         message_type == "document" and _is_image_document(message)
@@ -678,9 +739,11 @@ def _handle_admin_completion_screenshot_reply(message: dict, admin_state: dict) 
 
     if not is_image:
         if ADMIN_PHONE:
-            send_text_message(
-                ADMIN_PHONE,
-                "Please upload a valid image screenshot for the completed order.",
+            send_interactive_button_message(
+                to=ADMIN_PHONE,
+                body_text="Please upload a valid image screenshot for the completed order.",
+                button_id="admin_send_to_customer",
+                button_title="✅ Send to Customer",
             )
         print("Admin provided non-image message when completion screenshot was expected.")
         return
@@ -688,26 +751,19 @@ def _handle_admin_completion_screenshot_reply(message: dict, admin_state: dict) 
     media_object = message.get("image") or message.get("photo") or message.get("document") or {}
     media_id = media_object.get("id", "")
 
-    if message_type == "document":
-        send_document_message(customer_phone, media_id)
-    else:
-        send_image_message(customer_phone, media_id)
-    print(f"Forwarded completion screenshot to customer {customer_phone}.")
+    screenshots.append({"id": media_id, "type": message_type})
+    update_state(ADMIN_PHONE, screenshots=screenshots)
+    print(f"Saved screenshot {len(screenshots)} for order {order_id}.")
 
-    completion_msg = _build_customer_completion_message(order_id)
-    send_text_message(customer_phone, completion_msg)
-    print(f"Sent completion message to customer {customer_phone}.")
-
-    _set_stage(customer_phone, "completed", order_status="completed")
-
-    if ADMIN_PHONE:
-        send_text_message(
-            ADMIN_PHONE,
-            f"Order {order_id} completed. Screenshot and completion message delivered to customer {customer_phone}.",
-        )
-
-    from app.services.conversation_state import set_state
-    set_state(ADMIN_PHONE, {})
+    # Confirm screenshot saved and display Send to Customer button
+    count = len(screenshots)
+    confirm_text = f"✅ Screenshot {count} saved.\n\nUpload another screenshot or press 'Send to Customer' when ready."
+    send_interactive_button_message(
+        to=ADMIN_PHONE,
+        body_text=confirm_text,
+        button_id="admin_send_to_customer",
+        button_title="✅ Send to Customer",
+    )
 
 
 def _handle_admin_interactive_reply(message: dict) -> None:
